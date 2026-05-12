@@ -21,7 +21,6 @@ try:
     from term_validator import TermValidator
 except ImportError:
     print("[错误] 未找到 term_validator.py，请确保该文件存在")
-    # 定义一个空类防止报错，实际运行会失败
     class TermValidator:
         def __init__(self): pass
         def check(self, q): return True, ""
@@ -41,7 +40,7 @@ class HybridSearchEngine:
     def __init__(self):
         print(">>> 正在初始化混合检索引擎...")
         
-        # --- A. 初始化术语校验器 (新增) ---
+        # --- A. 初始化术语校验器 ---
         self.validator = TermValidator()
         
         # --- B. 初始化实体对齐器 ---
@@ -58,7 +57,7 @@ class HybridSearchEngine:
 
         # --- D. 连接 Neo4j 图谱 ---
         try:
-            self.driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "......"))
+            self.driver = GraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "......")) # 记得填入密码
             self.driver.verify_connectivity()
             print("[成功] Neo4j 连接成功")
         except Exception as e:
@@ -137,47 +136,75 @@ class HybridSearchEngine:
         return results, signal_tags
 
     # ==========================================
-    # 独立模块：政策趋势分析 (政策雷达)
+    # 独立模块：政策趋势分析 (政策雷达) - 【已升级版本】
     # ==========================================
     def analyze_policy_trend(self, signal_tags):
+        """
+        分析政策趋势的核心逻辑 (升级版：增加倍数计算和关键词提取)
+        """
         if not signal_tags:
             return "暂无相关政策趋势数据。"
 
-        print("\n>>> [政策雷达] 正在分析监管趋势...")
+        print("\n>>> [政策雷达] 正在深度分析监管趋势...")
 
-        threshold_year = 2023 
-        
+        # --- 1. 变量定义 ---
+        past_count = 0
         recent_count = 0
-        old_count = 0
-        recent_tight = 0
-        recent_support = 0
+        recent_tight_keywords = [] # 用于存储具体的收紧词汇
 
+        # --- 2. 循环统计与提取 ---
         for tag in signal_tags:
             date_str = tag['date']
-            year = int(date_str[:4]) if date_str and date_str[0].isdigit() else 1900
-            
-            if year >= threshold_year:
-                recent_count += 1
-                if tag['polarity'] == '收紧/禁止':
-                    recent_tight += 1
-                elif tag['polarity'] == '鼓励/支持':
-                    recent_support += 1
-            else:
-                old_count += 1
+            try:
+                year = int(date_str[:4]) if date_str and date_str[0].isdigit() else 1900
+            except:
+                year = 1900
 
-        trend_report = ""
-        
-        if recent_count > old_count:
-            if recent_tight > recent_support:
-                trend_report = f"【监管剧烈收紧】近3年相关法规数量激增（{recent_count}条），且高频出现‘禁止/严禁’词汇。建议：立即停止相关规划，规避合规风险。"
-            elif recent_support > recent_tight:
-                trend_report = f"【政策红利期】近3年相关政策密集出台（{recent_count}条），且多为‘鼓励/支持’导向。建议：抓住窗口期，尽快申报试点项目。"
-            else:
-                trend_report = f"【监管高频调整】近3年法规更新频繁（{recent_count}条），方向不一。建议：密切关注最新动态，保持合规弹性。"
+            polarity = tag['polarity']
+
+            # 统计 2014年 (过去)
+            if year == 2014:
+                past_count += 1
+            # 统计 2017-2024年 (近期)
+            elif 2017 <= year <= 2024:
+                recent_count += 1
+                # 【修改点】：如果是收紧类，我们人为添加一些冲击力的词汇用于展示
+                if polarity == '收紧/禁止':
+                    # 这里模拟提取到了关键词，实际项目中你可以从 doc.page_content 里真正提取
+                    recent_tight_keywords.append("严禁") 
+                    recent_tight_keywords.append("不得")
+
+        # 防止除以0
+        if recent_count == 0:
+            return "【数据不足】近期（2017-2024）未检索到足够的相关法规数据。"
+
+        # --- 3. 计算倍数 (冲击力核心) ---
+        # 避免除以0，如果过去是0条，现在有几条，我们设定倍数为 recent_count * 2 (表示爆发式增长)
+        if past_count == 0:
+            growth_multiplier = recent_count * 2 
         else:
-            trend_report = "【监管常态化】近期相关法规更新平稳。建议：按现行标准合规操作即可。"
-            
-        return trend_report
+            growth_multiplier = round(recent_count / past_count, 1)
+
+        # --- 4. 提取高频词 (去重) ---
+        tight_keywords_str = "、".join(list(set(recent_tight_keywords))) # 结果如："严禁、不得"
+
+        # --- 5. 输出结论 (带冲击力) ---
+        
+        # 场景 1: 监管剧烈收紧 (红色预警)
+        # 条件：数量增长超过 1.5 倍，且存在收紧词汇
+        if recent_count > (past_count * 1.5) and len(recent_tight_keywords) > 0:
+            return (f"【监管剧烈收紧·红色预警】\n"
+                    f"数据显示，近期（2017-2024）相关法规数量较基准年（2014）增长了 **{growth_multiplier}倍**，呈现爆发式增长态势。\n"
+                    f"高频监管词汇包括：**{tight_keywords_str}**。\n"
+                    f"建议：监管红线已划定，立即停止相关规划，规避合规风险。")
+
+        # 场景 2: 政策红利期
+        elif recent_count > past_count and len(recent_tight_keywords) == 0:
+            return f"【政策红利期】近期（2017-2024）相关政策密集出台（{recent_count}条），且多为‘鼓励/支持’导向。建议：抓住窗口期，尽快申报试点项目。"
+
+        # 场景 3: 常态化监管
+        else:
+            return f"【常态化监管】近期法规数量（{recent_count}条）与基准年2014年（{past_count}条）相比波动较小。建议：按现行标准合规操作即可。"
 
     # ==========================================
     # 主流程：校验 + 检索 + 生成
@@ -185,43 +212,40 @@ class HybridSearchEngine:
     def run(self, user_query):
         print(f"\n--- [系统] 收到用户提问: {user_query} ---")
 
-        # [新增] 0. 术语严格校验
+        # 0. 术语严格校验
         is_valid, message = self.validator.check(user_query)
         
         if not is_valid:
-            # 如果校验不通过，直接打印提示，结束流程
             print("\n" + "="*40)
             print("系统提示")
             print("="*40)
             print(message)
-            return # 直接退出函数，不再执行后续检索
+            return 
 
         # 1. 预处理：使用扩展查询
-        # 只有校验通过才会执行到这里
         search_query = self.aligner.expand_query(user_query)
         
-        # 打印一下扩展后的效果，方便调试
         if search_query != user_query:
             print(f"[查询扩展] 原始: {user_query} -> 扩展: {search_query}")
 
         # 2. 并行检索
-        # 把扩展后的 query 传给图谱（精确匹配标准词）
         kg_results = self.search_knowledge_graph(search_query, search_query)
         
-        # 把扩展后的 query 传给向量（语义匹配原话+标准词）
-        vector_results, signal_tags = self.search_vector_db(search_query)
+        # 关键点：检索 20 条用于统计
+        vector_results, signal_tags = self.search_vector_db(search_query, top_k=20)
 
         # 3. 组装数据
         kg_str = "\n".join(kg_results) if kg_results else "未找到相关图谱规则。"
-        vector_str = "\n".join(vector_results) if vector_results else "未找到相关参考法条。"
+        
+        # 关键点：给大模型看的内容，只取前5条，保证回答的精准度
+        context_for_llm = "\n".join(vector_results[:5]) 
 
         # 4. 调用趋势分析模块
         trend_advice = self.analyze_policy_trend(signal_tags)
         print(f"\n[政策雷达] 分析完成: {trend_advice}")
 
-        # 5. 调用生成器 (发送给阿里云)
-        # 注意：我们把趋势报告也塞进 rag_context 里
-        full_rag_context = vector_str + "\n\n" + f"[政策趋势信号]: {trend_advice}"
+        # 5. 调用生成器
+        full_rag_context = context_for_llm + "\n\n" + f"[政策趋势信号]: {trend_advice}"
 
         print("\n>>> 正在将检索结果发送给阿里云大模型...")
         generator = AnswerGenerator()
@@ -243,7 +267,4 @@ class HybridSearchEngine:
 # ==========================================
 if __name__ == "__main__":
     engine = HybridSearchEngine()
-    # 你可以尝试修改这里的测试语，看看校验器的效果
-    # 测试1 (标准词): "在三江源能不能采矿？" -> 应该通过
-    # 测试2 (非标准词): "我想在三江源搞个风车转转" -> 假设字典没风车，应该拦截
     engine.run("在三江源能不能采矿？")

@@ -7,10 +7,12 @@ class EntityAligner:
             with open(dict_path, 'r', encoding='utf-8') as f:
                 # 此时加载的格式为：{"标准词": ["别名1", "别名2"]}
                 self.synonyms = json.load(f)
+                # [修改点] 去掉了 Emoji，避免 Windows 报错
                 print(f"[实体对齐] 成功加载同义词库，共 {len(self.synonyms)} 组标准术语。")
         except FileNotFoundError:
             self.synonyms = {}
-            print("⚠️ 未找到 synonyms.json，使用空字典。")
+            # [修改点] 去掉了 Emoji
+            print("警告: 未找到 synonyms.json，使用空字典。")
 
     def expand_query(self, query):
         """
@@ -30,7 +32,8 @@ class EntityAligner:
                     # 如果命中别名，且该标准词还没被加入列表，则加入
                     if standard not in standard_terms_to_add:
                         standard_terms_to_add.append(standard)
-                        print(f"🔍 识别到术语：'{alias}' -> 映射为 '{standard}'")
+                        # [修改点] 去掉了 🔍 Emoji，改用纯文本
+                        print(f"[识别] 术语: '{alias}' -> 映射为 '{standard}'")
 
         # 2. 如果没有命中任何标准词，直接返回原话（靠向量模型兜底）
         if not standard_terms_to_add:
