@@ -1,16 +1,35 @@
-import requests
-import json
+import os
+from langchain_community.chat_models import ChatOpenAI
+from langchain_core.messages import HumanMessage
 
 class AnswerGenerator:
     def __init__(self):
-        # Ollama 默认运行在本地 11434 端口
-        self.url = "http://localhost:11434/api/generate"
-        # 这里填你刚才下载的模型名字，比如 'qwen2.5:7b' 或 'llama3'
-        self.model_name = "qwen2.5:7b" 
+        # ==========================================
+        # 【关键修改】初始化云端大模型 (替换原来的 Ollama)
+        # ==========================================
+        
+        # 1. 设置 API 地址 (小米专属地址)
+        # 注意：如果 search.py 里加了 os.environ，这里其实可以省略，但写在这里更保险
+        api_base_url = "https://api.mimo.com/v1" # <--- 请替换为小米邮件里的真实地址
+        
+        # 2. 设置 API Key (小米专属 Key)
+        # 建议通过环境变量设置，或者直接填在这里
+        api_key = os.getenv("XIAOMI_API_KEY", "你的小米API_KEY") # <--- 请替换为真实 Key
+        
+        # 3. 初始化模型
+        # 注意：model_name 需要根据小米平台支持的模型填写，例如 "mimo-7b" 或 "gpt-4o"
+        self.llm = ChatOpenAI(
+            model_name="mimo-7b",      # <--- 确认小米支持的模型名称
+            temperature=0.3,           # 保持严谨
+            api_key=api_key,
+            base_url=api_base_url,     # 核心修改：指向小米
+            timeout=120
+        )
+        print(f">>> 已初始化云端模型 (Base URL: {api_base_url})")
 
     def generate(self, user_question, kg_result, rag_context):
         """
-        使用本地 Ollama 模型生成回答
+        使用云端 API 生成回答
         """
         
         # ==========================================
@@ -67,31 +86,16 @@ class AnswerGenerator:
         )
 
         # ==========================================
-        # 2. 调用本地 Ollama 模型
+        # 2. 调用云端 API
         # ==========================================
-        print(f"\n>>> 正在呼叫本地模型 {self.model_name}...")
+        print(f"\n>>> 正在呼叫云端大模型...")
         
-        payload = {
-            "model": self.model_name,
-            "prompt": final_prompt,
-            "stream": False,  # 关闭流式输出，直接获取完整结果
-            "options": {
-                "temperature": 0.3  # 低温度（0-0.5），让法律回答更稳定、严谨
-            }
-        }
-
         try:
-            response = requests.post(
-                self.url, 
-                json=payload,
-                timeout=120  # 本地模型推理可能需要几秒到几十秒，设置长一点的超时时间
-            )
+            # 使用 LangChain 的 invoke 方法发送消息
+            response = self.llm.invoke([HumanMessage(content=final_prompt)])
             
-            if response.status_code == 200:
-                result = response.json()
-                return result.get('response', '')
-            else:
-                return f"[错误] 调用本地模型失败: {response.status_code} - {response.text}"
-                
+            # 返回内容
+            return response.content
+            
         except Exception as e:
-            return f"[错误] 连接失败: {str(e)}。请确保 Ollama 服务已启动 (ollama serve)"
+            return f"[错误] 调用云端模型失败: {str(e)}。请检查 API Key 和网络连接。"
