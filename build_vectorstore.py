@@ -29,14 +29,16 @@ def build_store_from_jsonl():
                     data = json.loads(line)
                     
                     # 将 JSON 数据转换为 LangChain 的 Document 对象
-                    # page_content 是文本内容，metadata 是标签（信号、极性等）
                     doc = Document(
                         page_content=data['text'],
                         metadata={
                             "source": data['source'],
                             "date": data['date'],
-                            "signal_strength": data['signal_strength'], # 核心标签：强/弱信号
-                            "polarity": data['polarity']                # 核心标签：收紧/鼓励
+                            "signal_strength": data['signal_strength'], 
+                            "polarity": data['polarity'],
+                            # --- 核心修改：补全上一轮新增的两个标签 ---
+                            "clause_type": data['clause_type'],  # 核心标签：总则/原则 或 具体条款
+                            "file_type": data['file_type']       # 核心标签：red_head (红头文件) 或 normal
                         }
                     )
                     docs.append(doc)
@@ -52,7 +54,6 @@ def build_store_from_jsonl():
         embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-small-zh-v1.5")
         
         # 创建向量库
-        # from_documents 会自动计算向量并建立索引
         db = FAISS.from_documents(docs, embeddings)
         
         # 保存到本地

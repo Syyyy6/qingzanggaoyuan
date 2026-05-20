@@ -1,11 +1,12 @@
 import pandas as pd
 from neo4j import GraphDatabase
+import re
 
 # ================= 配置区域 =================
 # 1. 检查这里：你的 Neo4j 密码是多少？
 NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "......"  # <--- ⚠️ 重点：如果不确定，去浏览器 http://localhost:7474 试一下
+NEO4J_PASSWORD = "2006315147hsy"  # <--- ⚠️ 重点：请填入你的实际密码
 
 # 2. CSV 文件路径
 CSV_FILE = "rules.csv"
@@ -32,28 +33,36 @@ class Neo4jConnection:
                 print(f"Error creating constraints: {e}")
 
     def insert_data(self, df):
-        """批量插入数据"""
+        """
+        批量插入数据（修改版：将 Action 作为一个整体属性存储）
+        """
         with self.driver.session() as session:
             for index, row in df.iterrows():
-                unit_name = row['Unit']
-                project_name = row['Project']
-                action = row['Action']
+                unit_name = str(row['Unit']).strip()
+                project_name = str(row['Project']).strip()
+                action_raw = str(row['Action']).strip()
 
-                # 根据 Action 决定关系类型
-                # 如果是"禁止"，建立 FORBIDS 关系；如果是"允许"，建立 ALLOWS 关系
-                # 也可以统一建立 HAS_RULE 关系，把动作作为属性，这里演示建立不同关系
-                relation_type = "FORBIDS" if "禁止" in action else "ALLOWS"
+                # --- 核心修改点 ---
+                # 1. 不再解析拆分 Action，直接使用原始字符串
+                # 2. 统一使用通用的关系类型 (如 HAS_RULE)，或者你可以根据需要保留之前的逻辑
+                #    这里为了简化，我们统一使用 HAS_RULE 关系，重点在于属性 action
+                
+                relation_type = "HAS_RULE" 
 
-                # Cypher 查询语句
-                # MERGE 确保节点不重复创建，然后建立关系
+                # 3. 构建 Cypher 查询
+                # 注意：我们将属性直接存为 r.action
                 query = f"""
                 MERGE (u:Unit {{name: $unit_name}})
                 MERGE (p:Project {{name: $project_name}})
                 MERGE (u)-[r:{relation_type}]->(p)
+                SET r.action = $action_val
                 """
 
                 try:
-                    session.run(query, unit_name=unit_name, project_name=project_name)
+                    session.run(query, 
+                                unit_name=unit_name, 
+                                project_name=project_name, 
+                                action_val=action_raw) # 传入完整的字符串
                 except Exception as e:
                     print(f"Error inserting row {index}: {e}")
 
