@@ -1,21 +1,3 @@
-# ==========================================
-# 文件名：policy_reranker.py
-# 功能：
-# “政策约束感知重排序模块”
-#
-# 核心思想：
-# 不仅看 embedding similarity
-# 还融合：
-# 1. 政策强度（signal_strength）
-# 2. 政策倾向（polarity）
-# 3. 条款层级（clause_type）
-# 4. 文件法律效力（file_type）
-# 5. 时间权重（新法优先）
-#
-# 最终实现：
-# “法律感知检索”
-# ==========================================
-
 import re
 from datetime import datetime
 from sklearn.metrics.pairwise import cosine_similarity
@@ -36,8 +18,6 @@ class PolicyReranker:
 
         # ==========================================
         # 二、政策倾向权重
-        # 核心：
-        # 禁止 > 限制 > 中性 > 鼓励
         # ==========================================
         self.polarity_weight = {
             "收紧/禁止": 1.0,
@@ -47,8 +27,6 @@ class PolicyReranker:
 
         # ==========================================
         # 三、条款层级权重
-        # 核心：
-        # 具体条款 > 总则原则
         # ==========================================
         self.clause_type_weight = {
             "具体条款": 1.0,
@@ -57,12 +35,20 @@ class PolicyReranker:
 
         # ==========================================
         # 四、法律效力权重
-        # 核心：
-        # 红头文件 > 普通文件
         # ==========================================
         self.file_type_weight = {
             "red_head": 1.0,
             "normal": 0.6
+        }
+
+        # ==========================================
+        # 五、准入动作权重（新增）
+        # 禁止 > 限制 > 允许
+        # ==========================================
+        self.action_level_weight = {
+            "禁止": 1.0,
+            "限制": 0.7,
+            "允许": 0.4
         }
 
     # ==========================================
@@ -81,7 +67,7 @@ class PolicyReranker:
         return 2000
 
     # ==========================================
-    # 时间权重（新法优于旧法）
+    # 时间权重
     # ==========================================
     def calculate_time_weight(self, year):
 
@@ -89,24 +75,19 @@ class PolicyReranker:
 
         diff = current_year - year
 
-        # 越新权重越高
         if diff <= 1:
             return 1.0
-
         elif diff <= 3:
             return 0.9
-
         elif diff <= 5:
             return 0.8
-
         elif diff <= 10:
             return 0.6
-
         else:
             return 0.4
 
     # ==========================================
-    # 计算语义相似度
+    # 语义相似度
     # ==========================================
     def calculate_semantic_similarity(
             self,
@@ -122,8 +103,41 @@ class PolicyReranker:
         return float(similarity)
 
     # ==========================================
-    # 核心：
-    # 计算法规总分
+    # 地域匹配
+    # ==========================================
+    def calculate_location_score(
+            self,
+            query,
+            location
+    ):
+
+        if not location:
+            return 0.0
+
+        if location in query:
+            return 1.0
+
+        return 0.0
+
+    # ==========================================
+    # 项目匹配
+    # ==========================================
+    def calculate_project_score(
+            self,
+            query,
+            project
+    ):
+
+        if not project:
+            return 0.0
+
+        if project in query:
+            return 1.0
+
+        return 0.0
+
+    # ==========================================
+    # 最终评分
     # ==========================================
     def calculate_final_score(
             self,
@@ -132,21 +146,29 @@ class PolicyReranker:
             polarity,
             clause_type,
             file_type,
-            time_weight
+            time_weight,
+            location_score,
+            project_score,
+            action_level
     ):
 
         # ==========================================
-        # 超参数（论文里可调）
+        # 超参数
         # ==========================================
 
-        alpha = 0.45   # 语义相似度
-        beta = 0.20    # 政策强度
-        gamma = 0.15   # 条款层级
-        delta = 0.10   # 法律效力
+        alpha = 0.30  # 语义
+        beta = 0.15   # 政策强度
+        gamma = 0.10  # 条款层级
+        delta = 0.10  # 法律效力
         epsilon = 0.10 # 时间权重
 
+        zeta = 0.15   # 地域匹配
+        eta = 0.15    # 项目匹配
+
+        theta = 0.15  # 禁止优先
+
         # ==========================================
-        # 各项权重
+        # 各项得分
         # ==========================================
 
         signal_score = self.signal_strength_weight.get(
@@ -169,10 +191,13 @@ class PolicyReranker:
             0.5
         )
 
+        action_score = self.action_level_weight.get(
+            action_level,
+            0.5
+        )
+
         # ==========================================
-        # PolicyWeight
-        # 融合：
-        # signal_strength + polarity
+        # policy weight
         # ==========================================
 
         policy_weight = (
@@ -181,7 +206,7 @@ class PolicyReranker:
         )
 
         # ==========================================
-        # 最终总分
+        # final score
         # ==========================================
 
         final_score = (
@@ -189,14 +214,16 @@ class PolicyReranker:
             beta * policy_weight +
             gamma * clause_score +
             delta * file_score +
-            epsilon * time_weight
+            epsilon * time_weight +
+            zeta * location_score +
+            eta * project_score +
+            theta * action_score
         )
 
         return round(final_score, 4)
 
     # ==========================================
-    # 主函数：
-    # 对 FAISS 召回结果重排序
+    # rerank 主函数
     # ==========================================
     def rerank(
             self,
@@ -206,22 +233,14 @@ class PolicyReranker:
             top_k=5
     ):
 
-        print("\n>>> [PolicyReranker] 开始政策约束感知重排序...")
+        print("\n>>> [PolicyReranker] 开始重排序...")
 
         if not docs:
             return []
 
-        # ==========================================
-        # 1. query 向量化
-        # ==========================================
-
         query_vector = embeddings_model.embed_query(query)
 
         reranked_results = []
-
-        # ==========================================
-        # 2. 遍历所有召回法规
-        # ==========================================
 
         for doc in docs:
 
@@ -235,18 +254,12 @@ class PolicyReranker:
                     doc.page_content
                 )
 
-                # ==========================================
-                # 语义相似度
-                # ==========================================
-
-                semantic_similarity = self.calculate_semantic_similarity(
-                    query_vector,
-                    doc_vector
+                semantic_similarity = (
+                    self.calculate_semantic_similarity(
+                        query_vector,
+                        doc_vector
+                    )
                 )
-
-                # ==========================================
-                # metadata 提取
-                # ==========================================
 
                 metadata = doc.metadata
 
@@ -275,40 +288,70 @@ class PolicyReranker:
                     ""
                 )
 
+                location = metadata.get(
+                    "location",
+                    ""
+                )
+
+                project = metadata.get(
+                    "project",
+                    ""
+                )
+
+                action_level = metadata.get(
+                    "action_level",
+                    "限制"
+                )
+
                 # ==========================================
                 # 时间权重
                 # ==========================================
 
                 year = self.extract_year(date_str)
 
-                time_weight = self.calculate_time_weight(year)
-
-                # ==========================================
-                # 最终评分
-                # ==========================================
-
-                final_score = self.calculate_final_score(
-                    semantic_similarity=semantic_similarity,
-                    signal_strength=signal_strength,
-                    polarity=polarity,
-                    clause_type=clause_type,
-                    file_type=file_type,
-                    time_weight=time_weight
+                time_weight = (
+                    self.calculate_time_weight(year)
                 )
 
                 # ==========================================
-                # 保存结果
+                # 地域/项目匹配
                 # ==========================================
+
+                location_score = (
+                    self.calculate_location_score(
+                        query,
+                        location
+                    )
+                )
+
+                project_score = (
+                    self.calculate_project_score(
+                        query,
+                        project
+                    )
+                )
+
+                # ==========================================
+                # 最终分数
+                # ==========================================
+
+                final_score = (
+                    self.calculate_final_score(
+                        semantic_similarity,
+                        signal_strength,
+                        polarity,
+                        clause_type,
+                        file_type,
+                        time_weight,
+                        location_score,
+                        project_score,
+                        action_level
+                    )
+                )
 
                 reranked_results.append({
                     "doc": doc,
-                    "score": final_score,
-                    "semantic_similarity": semantic_similarity,
-                    "signal_strength": signal_strength,
-                    "polarity": polarity,
-                    "clause_type": clause_type,
-                    "file_type": file_type,
-                    "time_weight": time_weight
+                    "score": final_score
                 })
 
             except Exception as e:
@@ -316,7 +359,7 @@ class PolicyReranker:
                 print(f"[重排序错误] {e}")
 
         # ==========================================
-        # 3. 按总分降序排序
+        # 排序
         # ==========================================
 
         reranked_results.sort(
@@ -325,27 +368,7 @@ class PolicyReranker:
         )
 
         # ==========================================
-        # 4. 打印 Top 结果（调试）
-        # ==========================================
-
-        print("\n>>> [Rerank Top Results]")
-
-        for i, item in enumerate(reranked_results[:top_k]):
-
-            doc = item["doc"]
-
-            print(f"\nTOP-{i+1}")
-            print(f"总分: {item['score']}")
-            print(f"语义相似度: {round(item['semantic_similarity'], 4)}")
-            print(f"政策强度: {item['signal_strength']}")
-            print(f"政策倾向: {item['polarity']}")
-            print(f"条款层级: {item['clause_type']}")
-            print(f"文件级别: {item['file_type']}")
-            print(f"时间权重: {item['time_weight']}")
-            print(f"内容: {doc.page_content[:120]}")
-
-        # ==========================================
-        # 5. 返回 rerank 后的 docs
+        # 返回 TopK
         # ==========================================
 
         final_docs = [
